@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, Plus, Trash2, Download, RefreshCw, Wand2, Image as ImageIcon, AlertCircle } from 'lucide-react';
+import { Sparkles, Plus, Trash2, Download, RefreshCw, Wand2, Image as ImageIcon, AlertCircle, RotateCcw, Dices } from 'lucide-react';
 import { 
   createGenerationTask, 
-  pollTaskUntilComplete
+  pollTaskUntilComplete,
+  generateSteps
 } from './services/api';
 import type { TaskResponse, GenerateRequest } from './services/api';
 
@@ -27,16 +28,65 @@ const NanoFlowUI = () => {
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedCharacter, setSelectedCharacter] = useState<'bear' | 'rabbit' | 'cat'>('bear');
+  const [isGeneratingSteps, setIsGeneratingSteps] = useState(false);
 
   // 模拟“智能填充”功能 (PRD P0功能)
-  const handleSmartFill = () => {
-    setTitle('如何制作美味拿铁');
-    setSteps([
-      { id: 1, title: '研磨咖啡豆', desc: '选择新鲜的中深烘焙豆子' },
-      { id: 2, title: '萃取浓缩', desc: '使用咖啡机萃取双份Espresso' },
-      { id: 3, title: '打发牛奶', desc: '将牛奶打发至绵密奶泡状态' },
-      { id: 4, title: '融合拉花', desc: '将牛奶倒入咖啡并制作图案' },
-    ]);
+  const handleSmartFill = async () => {
+    const hasTitle = title.trim().length > 0;
+
+    // 场景1: 输入框为空 - 生成示例
+    if (!hasTitle) {
+      setTitle('如何制作美味拿铁');
+      setSteps([
+        { id: 1, title: '研磨咖啡豆', desc: '选择新鲜的中深烘焙豆子' },
+        { id: 2, title: '萃取浓缩', desc: '使用咖啡机萃取双份Espresso' },
+        { id: 3, title: '打发牛奶', desc: '将牛奶打发至绵密奶泡状态' },
+        { id: 4, title: '融合拉花', desc: '将牛奶倒入咖啡并制作图案' },
+      ]);
+      return;
+    }
+
+    // 场景2: 输入框有内容 - 根据标题生成步骤
+    try {
+      setIsGeneratingSteps(true);
+      setError(null);
+
+      const response = await generateSteps(title);
+      
+      // 将返回的步骤转换为组件所需的格式
+      const newSteps = response.steps.map((step, index) => ({
+        id: index + 1,
+        title: step.title,
+        desc: step.description
+      }));
+
+      setSteps(newSteps);
+    } catch (err) {
+      console.error('Generate steps error:', err);
+      setError(err instanceof Error ? err.message : '生成步骤失败，请重试');
+    } finally {
+      setIsGeneratingSteps(false);
+    }
+  };
+
+  // 清空/重置功能
+  const handleClear = () => {
+    if (window.confirm('确定要清空当前内容吗？')) {
+      setTitle('');
+      setSteps([
+        { id: 1, title: '步骤 1', desc: '' },
+        { id: 2, title: '步骤 2', desc: '' }
+      ]);
+      setHasResult(false);
+      setGeneratedImageUrl(null);
+      setError(null);
+    }
+  };
+
+  // 检查是否有内容
+  const hasContent = () => {
+    if (title.trim()) return true;
+    return steps.some(step => step.title.trim() || step.desc.trim());
   };
 
   // 真实的生成过程 - 调用后端API
@@ -104,7 +154,7 @@ const NanoFlowUI = () => {
     setSteps([...steps, { id: newId, title: `步骤 ${steps.length + 1}`, desc: '' }]);
   };
 
-  const removeStep = (id) => {
+  const removeStep = (id: number) => {
     setSteps(steps.filter(step => step.id !== id));
   };
 
@@ -140,11 +190,31 @@ const NanoFlowUI = () => {
                 />
                 <button 
                   onClick={handleSmartFill}
-                  className="p-3 bg-blue-50 text-blue-400 rounded-2xl hover:bg-blue-100 transition-colors tooltip"
-                  title="AI 智能填充"
+                  disabled={isGeneratingSteps}
+                  className={`p-3 rounded-2xl transition-colors relative ${
+                    isGeneratingSteps
+                      ? 'bg-blue-100 text-blue-300 cursor-wait'
+                      : 'bg-blue-50 text-blue-400 hover:bg-blue-100'
+                  }`}
+                  title={title.trim() ? '根据标题生成步骤' : '生成示例'}
                 >
-                  <Wand2 size={20} />
+                  {isGeneratingSteps ? (
+                    <div className="w-5 h-5 border-2 border-blue-300 border-t-blue-500 rounded-full animate-spin"></div>
+                  ) : title.trim() ? (
+                    <Wand2 size={20} />
+                  ) : (
+                    <Dices size={20} />
+                  )}
                 </button>
+                {hasContent() && (
+                  <button 
+                    onClick={handleClear}
+                    className="p-3 text-slate-300 hover:text-red-500 rounded-2xl hover:bg-red-50 transition-colors"
+                    title="清空所有内容"
+                  >
+                    <RotateCcw size={20} />
+                  </button>
+                )}
               </div>
             </div>
 

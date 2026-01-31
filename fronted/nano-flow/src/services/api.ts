@@ -61,6 +61,14 @@ export interface TaskResponse {
   estimated_time: number | null;
 }
 
+export interface GenerateStepsRequest {
+  title: string;
+}
+
+export interface GenerateStepsResponse {
+  steps: StepItem[];
+}
+
 /**
  * 创建图像生成任务
  */
@@ -129,4 +137,26 @@ export async function pollTaskUntilComplete(
 
     poll();
   });
+}
+
+/**
+ * 根据标题自动生成步骤列表
+ */
+export async function generateSteps(
+  title: string
+): Promise<GenerateStepsResponse> {
+  const response = await fetch(`${API_BASE_URL}/generate/generate-steps`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ title }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || '生成步骤失败');
+  }
+
+  return response.json();
 }
