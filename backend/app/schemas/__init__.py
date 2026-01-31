@@ -16,7 +16,12 @@ from .task import (
     TaskResponse,
     TaskCreate,
 )
-from .generate import GenerateRequest, GenerateResponse
+from .generate import (
+    GenerateRequest, 
+    GenerateResponse,
+    GenerateStepsRequest,
+    GenerateStepsResponse
+)
 
 __all__ = [
     # Common
@@ -37,4 +42,6 @@ __all__ = [
     # Generate
     "GenerateRequest",
     "GenerateResponse",
+    "GenerateStepsRequest",
+    "GenerateStepsResponse",
 ]

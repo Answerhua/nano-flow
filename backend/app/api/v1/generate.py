@@ -4,8 +4,15 @@ import asyncio
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from loguru import logger
 
-from ...schemas import GenerateRequest, GenerateResponse, TaskResponse
+from ...schemas import (
+    GenerateRequest, 
+    GenerateResponse, 
+    TaskResponse,
+    GenerateStepsRequest,
+    GenerateStepsResponse
+)
 from ...services import PromptBuilder, ImageGenerator
+from ...services.llm_service import LLMService
 from ...core.task_manager import task_manager
 
 router = APIRouter(prefix="/generate", tags=["generate"])
@@ -70,6 +77,40 @@ async def get_generation_status(task_id: str):
         raise HTTPException(status_code=500, detail=f"查询任务失败: {str(e)}")
 
 
+@router.post("/generate-steps", response_model=GenerateStepsResponse)
+async def generate_steps(request: GenerateStepsRequest):
+    """
+    根据主题自动生成步骤列表
+    
+    此接口调用千问 API，根据用户输入的主题自动生成 3-6 个流程步骤。
+    生成的步骤可以直接用于 /api/v1/generate 接口。
+    """
+    try:
+        logger.info(f"Generating steps for topic: {request.title}")
+        
+        # 创建 LLM 服务实例
+        llm_service = LLMService()
+        
+        # 调用 LLM 生成步骤
+        steps = await llm_service.generate_steps_from_topic(request.title)
+        
+        logger.info(f"Successfully generated {len(steps)} steps")
+        
+        return GenerateStepsResponse(steps=steps)
+        
+    except ValueError as e:
+        # JSON 解析失败或格式错误
+        logger.error(f"Failed to parse LLM response: {e}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"解析 AI 响应失败: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to generate steps: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"生成步骤失败: {str(e)}"
+        )
 async def generate_image_task(task_id: str, request: GenerateRequest):
     """
     后台任务：执行图像生成
@@ -116,18 +157,45 @@ async def generate_image_task(task_id: str, request: GenerateRequest):
         logger.info(f"Task {task_id}: Generating image...")
         image_generator = ImageGenerator()
         
+        # 定义进度回调函数
+        async def progress_callback(progress: int, status: str):
+            """GRSAI 进度回调"""
+            message_map = {
+                0: "开始生成图像... 🎨",
+                20: "正在理解提示词... 🧠",
+                40: "正在绘制基础轮廓... ✏️",
+                60: "正在添加细节... 🖌️",
+                80: "正在优化画面... ✨",
+                100: "即将完成... 🎉"
+            }
+            
+            # 根据进度选择消息
+            message = message_map.get(progress, f"生成中... {progress}%")
+            
+            # 估算剩余时间（假设总共需要 60 秒）
+            estimated_time = max(0, int((100 - progress) * 0.6))
+            
+            await task_manager.update_status(
+                task_id=task_id,
+                status="processing",
+                progress=40 + int(progress * 0.4),  # 40-80% 的进度范围
+                message=message,
+                estimated_time=estimated_time
+            )
+        
         generation_result = await image_generator.generate_image(
             prompt=enhanced_prompt,
             negative_prompt=negative_prompt,
-            seed=request.seed
+            seed=request.seed,
+            progress_callback=progress_callback
         )
         
         await task_manager.update_status(
             task_id=task_id,
             status="processing",
-            progress=80,
+            progress=85,
             message="正在优化画面... ✨",
-            estimated_time=10
+            estimated_time=5
         )
         
         # Step 4: 创建缩略图
@@ -160,3 +228,5 @@ async def generate_image_task(task_id: str, request: GenerateRequest):
             error_code="GENERATION_ERROR",
             error_message=str(e)
         )
+
+

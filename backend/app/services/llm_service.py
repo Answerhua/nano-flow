@@ -290,3 +290,152 @@ Quality tags: masterpiece, best quality, highly detailed, clean composition, pro
                     for i in range(expected_count)
                 ]
             }
+    
+    async def generate_steps_from_topic(self, title: str) -> List[Dict[str, str]]:
+        """
+        根据主题自动生成步骤列表
+        
+        Args:
+            title: 主题/标题
+            
+        Returns:
+            步骤列表，每个步骤包含 title 和 description
+            
+        Raises:
+            HTTPException: 当生成失败或 JSON 解析失败时
+        """
+        system_prompt = """你是一个专业的流程图设计专家。你的任务是将用户输入的主题拆解为 3-6 个清晰、可操作的步骤。
+
+**严格要求：**
+1. 必须且仅返回纯 JSON 数组字符串
+2. 严禁包含任何 Markdown 标记（如 ```json 或 ```）
+3. 严禁包含任何开场白、解释或结束语
+4. 每个步骤的 title 必须在 8 字以内
+5. 每个步骤的 description 必须在 15 字以内
+6. 步骤数量必须在 3-6 个之间
+
+**输出格式（仅此格式，无其他内容）：**
+[
+  {"title": "步骤标题", "description": "步骤描述"},
+  {"title": "步骤标题", "description": "步骤描述"}
+]"""
+
+        user_prompt = f"请为以下主题生成流程步骤：{title}"
+        
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self.api_base}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": system_prompt
+                            },
+                            {
+                                "role": "user",
+                                "content": user_prompt
+                            }
+                        ],
+                        "temperature": 0.7,
+                        "max_tokens": 800
+                    }
+                )
+                
+                response.raise_for_status()
+                result = response.json()
+                
+                content = result["choices"][0]["message"]["content"].strip()
+                logger.info(f"Generate steps raw response: {content[:200]}...")
+                
+                # 解析响应（带容错处理）
+                steps = self._parse_steps_response(content)
+                
+                # 验证步骤数量
+                if not (3 <= len(steps) <= 6):
+                    logger.warning(f"Step count {len(steps)} out of range, adjusting...")
+                    if len(steps) < 3:
+                        raise ValueError("生成的步骤数量少于 3 个")
+                    steps = steps[:6]  # 截取前 6 个
+                
+                return steps
+                
+        except Exception as e:
+            logger.error(f"Failed to generate steps: {e}")
+            raise
+    
+    def _parse_steps_response(self, content: str) -> List[Dict[str, str]]:
+        """
+        解析 LLM 返回的步骤列表（带容错处理）
+        
+        Args:
+            content: LLM 返回的原始内容
+            
+        Returns:
+            解析后的步骤列表
+            
+        Raises:
+            ValueError: 当 JSON 解析失败或格式不正确时
+        """
+        import json
+        import re
+        
+        try:
+            # 容错处理：清理可能的 Markdown 代码块标记
+            cleaned_content = content.strip()
+            
+            # 移除开头的 ```json 或 ```
+            if cleaned_content.startswith("```json"):
+                cleaned_content = cleaned_content[7:]
+            elif cleaned_content.startswith("```"):
+                cleaned_content = cleaned_content[3:]
+            
+            # 移除结尾的 ```
+            if cleaned_content.endswith("```"):
+                cleaned_content = cleaned_content[:-3]
+            
+            cleaned_content = cleaned_content.strip()
+            
+            # 尝试提取 JSON 数组
+            # 寻找第一个 [ 和最后一个 ]
+            start = cleaned_content.find('[')
+            end = cleaned_content.rfind(']') + 1
+            
+            if start < 0 or end <= start:
+                raise ValueError("未找到有效的 JSON 数组")
+            
+            json_str = cleaned_content[start:end]
+            steps = json.loads(json_str)
+            
+            # 验证结构
+            if not isinstance(steps, list):
+                raise ValueError("返回的不是数组")
+            
+            # 验证每个步骤的结构
+            validated_steps = []
+            for step in steps:
+                if not isinstance(step, dict):
+                    raise ValueError("步骤格式不正确")
+                
+                if "title" not in step or "description" not in step:
+                    raise ValueError("步骤缺少必需字段 title 或 description")
+                
+                validated_steps.append({
+                    "title": str(step["title"]).strip(),
+                    "description": str(step["description"]).strip()
+                })
+            
+            logger.info(f"Successfully parsed {len(validated_steps)} steps")
+            return validated_steps
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}, content: {content[:500]}")
+            raise ValueError(f"JSON 解析失败: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to parse steps response: {e}")
+            raise ValueError(f"解析步骤失败: {str(e)}")

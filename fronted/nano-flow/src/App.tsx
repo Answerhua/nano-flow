@@ -1,16 +1,32 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, Plus, Trash2, Download, RefreshCw, Wand2, Image as ImageIcon } from 'lucide-react';
+import { Sparkles, Plus, Trash2, Download, RefreshCw, Wand2, Image as ImageIcon, AlertCircle } from 'lucide-react';
+import { 
+  createGenerationTask, 
+  pollTaskUntilComplete
+} from './services/api';
+import type { TaskResponse, GenerateRequest } from './services/api';
+
+interface Step {
+  id: number;
+  title: string;
+  desc: string;
+}
 
 const NanoFlowUI = () => {
-  // 模拟的状态
+  // 状态管理
   const [title, setTitle] = useState('');
-  const [steps, setSteps] = useState([
+  const [steps, setSteps] = useState<Step[]>([
     { id: 1, title: '步骤 1', desc: '' },
     { id: 2, title: '步骤 2', desc: '' }
   ]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [hasResult, setHasResult] = useState(false);
   const [loadingText, setLoadingText] = useState('正在分析需求... 🧠');
+  const [progress, setProgress] = useState(0);
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedCharacter, setSelectedCharacter] = useState<'bear' | 'rabbit' | 'cat'>('bear');
 
   // 模拟“智能填充”功能 (PRD P0功能)
   const handleSmartFill = () => {
@@ -23,31 +39,64 @@ const NanoFlowUI = () => {
     ]);
   };
 
-  // 模拟生成过程
-  const handleGenerate = () => {
-    if (!title) return;
-    setIsGenerating(true);
-    setHasResult(false);
-    
-    // 模拟 PRD 中的可爱加载文案
-    const texts = [
-      '正在分析需求... 🧠',
-      '正在召唤画图小精灵... 🧚‍♀️',
-      '正在给线条上色... 🎨',
-      '最后调整光影... ✨'
-    ];
-    
-    let i = 0;
-    const interval = setInterval(() => {
-      setLoadingText(texts[i % texts.length]);
-      i++;
-    }, 800);
+  // 真实的生成过程 - 调用后端API
+  const handleGenerate = async () => {
+    if (!title || steps.length < 2) {
+      setError('请填写标题和至少2个步骤');
+      return;
+    }
 
-    setTimeout(() => {
-      clearInterval(interval);
+    try {
+      setIsGenerating(true);
+      setHasResult(false);
+      setError(null);
+      setProgress(0);
+      setLoadingText('正在分析需求... 🧠');
+
+      // 构建请求数据
+      const request: GenerateRequest = {
+        title,
+        steps: steps.map(step => ({
+          title: step.title,
+          description: step.desc
+        })),
+        visual_preferences: {
+          character: selectedCharacter,
+          color_scheme: 'pastel',
+          custom_tags: ['kawaii', 'flat']
+        },
+        seed: null
+      };
+
+      // 创建生成任务
+      const createResponse = await createGenerationTask(request);
+      setCurrentTaskId(createResponse.task_id);
+      setLoadingText(createResponse.message);
+
+      // 轮询任务状态
+      await pollTaskUntilComplete(
+        createResponse.task_id,
+        (task: TaskResponse) => {
+          // 更新进度和消息
+          setProgress(task.progress || 0);
+          setLoadingText(task.message || '生成中...');
+
+          // 如果任务完成，设置结果
+          if (task.status === 'completed' && task.result) {
+            setGeneratedImageUrl(task.result.image_url);
+            setHasResult(true);
+            setIsGenerating(false);
+          }
+        },
+        2000 // 每2秒轮询一次
+      );
+
+    } catch (err) {
+      console.error('Generation error:', err);
+      setError(err instanceof Error ? err.message : '生成失败，请重试');
       setIsGenerating(false);
-      setHasResult(true);
-    }, 3500);
+      setHasResult(false);
+    }
   };
 
   const addStep = () => {
@@ -86,7 +135,7 @@ const NanoFlowUI = () => {
                   type="text" 
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="例如: Vibe Coding 开发流程"
+                  placeholder="例如: 如何制作美味拿铁"
                   className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-4 py-3 focus:outline-none focus:border-pink-300 transition-colors"
                 />
                 <button 
@@ -150,6 +199,106 @@ const NanoFlowUI = () => {
               </div>
             </div>
 
+            {/* Character Selection */}
+            <div className="mb-6">
+              <label className="block text-sm font-bold text-slate-400 mb-3 uppercase tracking-wider">
+                选择主角 (Choose Character)
+              </label>
+              <div className="flex gap-3 justify-center">
+                {/* Bear Option */}
+                <button
+                  onClick={() => setSelectedCharacter('bear')}
+                  className={`flex-1 flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all duration-300 ${
+                    selectedCharacter === 'bear'
+                      ? 'bg-pink-50 border-pink-300 shadow-lg shadow-pink-200 scale-105'
+                      : 'bg-white border-slate-200 hover:border-pink-200 hover:shadow-md'
+                  }`}
+                >
+                  <svg 
+                    width="40" 
+                    height="40" 
+                    viewBox="0 0 48 48" 
+                    fill="none" 
+                    className={`transition-transform ${selectedCharacter === 'bear' ? 'scale-110' : ''}`}
+                  >
+                    <circle cx="14" cy="12" r="8" fill="#FFB8B8" />
+                    <circle cx="34" cy="12" r="8" fill="#FFB8B8" />
+                    <circle cx="24" cy="26" r="16" fill="#FFCACA" />
+                    <circle cx="19" cy="24" r="2.5" fill="#8B4513" />
+                    <circle cx="29" cy="24" r="2.5" fill="#8B4513" />
+                    <path d="M24 28 Q24 32 24 32" stroke="#8B4513" strokeWidth="2" strokeLinecap="round" />
+                    <path d="M21 32 Q24 34 27 32" stroke="#FF9999" strokeWidth="2" strokeLinecap="round" fill="none" />
+                  </svg>
+                  <span className={`text-sm font-bold ${selectedCharacter === 'bear' ? 'text-pink-500' : 'text-slate-500'}`}>
+                    小熊 Bear
+                  </span>
+                </button>
+
+                {/* Rabbit Option */}
+                <button
+                  onClick={() => setSelectedCharacter('rabbit')}
+                  className={`flex-1 flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all duration-300 ${
+                    selectedCharacter === 'rabbit'
+                      ? 'bg-pink-50 border-pink-300 shadow-lg shadow-pink-200 scale-105'
+                      : 'bg-white border-slate-200 hover:border-pink-200 hover:shadow-md'
+                  }`}
+                >
+                  <svg 
+                    width="40" 
+                    height="40" 
+                    viewBox="0 0 48 48" 
+                    fill="none"
+                    className={`transition-transform ${selectedCharacter === 'rabbit' ? 'scale-110' : ''}`}
+                  >
+                    <ellipse cx="16" cy="12" rx="5" ry="14" fill="#FFE4E4" />
+                    <ellipse cx="32" cy="12" rx="5" ry="14" fill="#FFE4E4" />
+                    <ellipse cx="16" cy="12" rx="2.5" ry="10" fill="#FFC9C9" />
+                    <ellipse cx="32" cy="12" rx="2.5" ry="10" fill="#FFC9C9" />
+                    <circle cx="24" cy="28" r="14" fill="#FFF0F0" />
+                    <circle cx="20" cy="26" r="2" fill="#8B4513" />
+                    <circle cx="28" cy="26" r="2" fill="#8B4513" />
+                    <circle cx="24" cy="30" r="1.5" fill="#FFB8D0" />
+                    <path d="M21 33 Q24 35 27 33" stroke="#FFB8D0" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+                  </svg>
+                  <span className={`text-sm font-bold ${selectedCharacter === 'rabbit' ? 'text-pink-500' : 'text-slate-500'}`}>
+                    兔子 Rabbit
+                  </span>
+                </button>
+
+                {/* Cat Option */}
+                <button
+                  onClick={() => setSelectedCharacter('cat')}
+                  className={`flex-1 flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all duration-300 ${
+                    selectedCharacter === 'cat'
+                      ? 'bg-pink-50 border-pink-300 shadow-lg shadow-pink-200 scale-105'
+                      : 'bg-white border-slate-200 hover:border-pink-200 hover:shadow-md'
+                  }`}
+                >
+                  <svg 
+                    width="40" 
+                    height="40" 
+                    viewBox="0 0 48 48" 
+                    fill="none"
+                    className={`transition-transform ${selectedCharacter === 'cat' ? 'scale-110' : ''}`}
+                  >
+                    <path d="M12 20 L8 8 L16 16 Z" fill="#FFD5B8" />
+                    <path d="M36 20 L40 8 L32 16 Z" fill="#FFD5B8" />
+                    <circle cx="24" cy="26" r="15" fill="#FFE0C8" />
+                    <circle cx="19" cy="24" r="2.5" fill="#8B4513" />
+                    <circle cx="29" cy="24" r="2.5" fill="#8B4513" />
+                    <circle cx="24" cy="29" r="1.5" fill="#FFB8B8" />
+                    <path d="M24 29 L24 32" stroke="#8B4513" strokeWidth="1.5" strokeLinecap="round" />
+                    <path d="M20 32 Q24 34 28 32" stroke="#FFB8B8" strokeWidth="2" strokeLinecap="round" fill="none" />
+                    <path d="M16 26 Q12 26 10 24" stroke="#D4A574" strokeWidth="1.5" strokeLinecap="round" />
+                    <path d="M32 26 Q36 26 38 24" stroke="#D4A574" strokeWidth="1.5" strokeLinecap="round" />
+                  </svg>
+                  <span className={`text-sm font-bold ${selectedCharacter === 'cat' ? 'text-pink-500' : 'text-slate-500'}`}>
+                    小猫 Cat
+                  </span>
+                </button>
+              </div>
+            </div>
+
             {/* Generate Button */}
             <button 
               onClick={handleGenerate}
@@ -189,45 +338,72 @@ const NanoFlowUI = () => {
               {isGenerating && (
                 <div className="text-center z-10">
                   <div className="w-20 h-20 border-4 border-pink-200 border-t-pink-500 rounded-full animate-spin mx-auto mb-6"></div>
-                  <p className="text-lg font-medium text-slate-600 animate-pulse">{loadingText}</p>
+                  <p className="text-lg font-medium text-slate-600 animate-pulse mb-3">{loadingText}</p>
+                  {progress > 0 && (
+                    <div className="max-w-xs mx-auto">
+                      <div className="bg-slate-200 rounded-full h-2 overflow-hidden">
+                        <div 
+                          className="bg-gradient-to-r from-pink-400 to-orange-400 h-full transition-all duration-500"
+                          style={{ width: `${progress}%` }}
+                        ></div>
+                      </div>
+                      <p className="text-sm text-slate-400 mt-2">{progress}%</p>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Result Mockup */}
-              {hasResult && (
-                <div className="relative w-full h-full bg-[#FFF8E7] flex flex-col items-center justify-center p-8 animate-fade-in">
-                  {/* 这里模拟生成出的 Nano Banana Pro 风格图片 */}
-                  <div className="w-full max-w-md aspect-video bg-white rounded-xl shadow-sm border-2 border-slate-800 p-4 relative overflow-hidden">
-                    <div className="absolute top-0 left-0 w-full h-2 bg-pink-300"></div>
-                    <div className="flex justify-center mt-2 mb-4">
-                      <span className="font-bold text-slate-800 text-lg border-b-2 border-yellow-300">{title}</span>
-                    </div>
-                    <div className="flex justify-between items-center gap-2">
-                       {/* 模拟步骤图 */}
-                       {[1,2,3].map(i => (
-                         <div key={i} className="flex-1 flex flex-col items-center gap-2">
-                            <div className="w-12 h-12 rounded-full bg-blue-100 border-2 border-slate-800 flex items-center justify-center">
-                              🐻
-                            </div>
-                            <div className="h-1 w-full bg-slate-200 rounded-full"></div>
-                         </div>
-                       ))}
-                    </div>
-                    <div className="absolute bottom-2 right-2 text-[10px] text-slate-400">Generatd by Nano Flow</div>
+              {/* Result - 显示生成的图片 */}
+              {hasResult && generatedImageUrl && (
+                <div className="relative w-full h-full flex flex-col items-center justify-center p-4 animate-fade-in">
+                  <img 
+                    src={generatedImageUrl} 
+                    alt={title}
+                    className="max-w-full max-h-full object-contain rounded-xl shadow-lg"
+                    onError={(e) => {
+                      console.error('Image load error');
+                      setError('图片加载失败');
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Error State */}
+              {error && !isGenerating && (
+                <div className="text-center p-8">
+                  <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <AlertCircle className="text-red-500" size={40} />
                   </div>
+                  <h3 className="text-xl font-bold text-slate-700 mb-2">出错了</h3>
+                  <p className="text-red-500 max-w-xs mx-auto mb-4">{error}</p>
+                  <button 
+                    onClick={() => setError(null)}
+                    className="px-6 py-2 bg-slate-200 hover:bg-slate-300 rounded-xl transition-colors"
+                  >
+                    关闭
+                  </button>
                 </div>
               )}
             </div>
 
             {/* Action Bar */}
-            {hasResult && (
+            {hasResult && generatedImageUrl && (
               <div className="p-4 flex gap-3 justify-end">
-                <button className="flex items-center px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors text-sm font-bold">
+                <button 
+                  onClick={handleGenerate}
+                  className="flex items-center px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-xl transition-colors text-sm font-bold"
+                >
                   <RefreshCw size={16} className="mr-2" /> Regenerate
                 </button>
-                <button className="flex items-center px-6 py-2 bg-slate-800 text-white hover:bg-slate-700 rounded-xl transition-colors text-sm font-bold shadow-lg shadow-slate-200">
+                <a 
+                  href={generatedImageUrl}
+                  download={`${title.replace(/\s+/g, '_')}_nano_flow.png`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center px-6 py-2 bg-slate-800 text-white hover:bg-slate-700 rounded-xl transition-colors text-sm font-bold shadow-lg shadow-slate-200"
+                >
                   <Download size={16} className="mr-2" /> Download
-                </button>
+                </a>
               </div>
             )}
           </div>

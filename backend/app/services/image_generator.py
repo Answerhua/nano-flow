@@ -1,8 +1,8 @@
-"""Image Generator Service - Nano Banana Pro API Integration"""
+"""Image Generator Service - GRSAI Nano Banana Pro API Integration"""
 
 import httpx
 import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 from loguru import logger
 
 from ..config import settings
@@ -10,18 +10,25 @@ from ..config import settings
 
 class ImageGenerator:
     """
-    Nano Banana Pro 图像生成服务
-    封装图像生成 API 调用逻辑
+    GRSAI Nano Banana Pro 图像生成服务
+    使用 GRSAI API 调用 Nano Banana Pro 模型
     """
     
     def __init__(self):
-        self.api_key = settings.NANO_BANANA_API_KEY
-        self.api_base = settings.NANO_BANANA_API_BASE
-        self.model = settings.NANO_BANANA_MODEL
-        self.default_width = settings.DEFAULT_IMAGE_WIDTH
-        self.default_height = settings.DEFAULT_IMAGE_HEIGHT
-        self.default_steps = settings.DEFAULT_STEPS
-        self.default_cfg_scale = settings.DEFAULT_CFG_SCALE
+        self.api_key = settings.GRSAI_API_KEY
+        self.api_base = settings.GRSAI_API_BASE
+        self.model = settings.GRSAI_MODEL
+        self.image_size = settings.GRSAI_IMAGE_SIZE
+        self.aspect_ratio = settings.GRSAI_ASPECT_RATIO
+        self.poll_interval = settings.GRSAI_POLL_INTERVAL
+        self.max_poll_attempts = settings.GRSAI_MAX_POLL_ATTEMPTS
+        
+        # 分辨率映射（用于返回元数据）
+        self.size_resolution_map = {
+            "1K": {"16:9": "1920x1080", "9:16": "1080x1920", "1:1": "1024x1024", "auto": "1344x768"},
+            "2K": {"16:9": "2560x1440", "9:16": "1440x2560", "1:1": "2048x2048", "auto": "2048x1152"},
+            "4K": {"16:9": "3840x2160", "9:16": "2160x3840", "1:1": "4096x4096", "auto": "3840x2160"}
+        }
     
     async def generate_image(
         self,
@@ -31,76 +38,87 @@ class ImageGenerator:
         height: Optional[int] = None,
         steps: Optional[int] = None,
         cfg_scale: Optional[float] = None,
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
+        aspect_ratio: Optional[str] = None,
+        image_size: Optional[str] = None,
+        model: Optional[str] = None,
+        reference_urls: Optional[list] = None,
+        progress_callback: Optional[Callable[[int, str], None]] = None
     ) -> Dict[str, Any]:
         """
         生成图像
         
         Args:
             prompt: 正面提示词
-            negative_prompt: 负面提示词
-            width: 图片宽度
-            height: 图片高度
-            steps: 采样步数
-            cfg_scale: CFG scale
-            seed: 随机种子
+            negative_prompt: 负面提示词（GRSAI 会自动处理，可以拼接到 prompt）
+            width: 图片宽度（忽略，使用 aspect_ratio）
+            height: 图片高度（忽略，使用 aspect_ratio）
+            steps: 采样步数（忽略，GRSAI 自动处理）
+            cfg_scale: CFG scale（忽略，GRSAI 自动处理）
+            seed: 随机种子（GRSAI 不支持，保留用于元数据）
+            aspect_ratio: 图片比例（16:9, 9:16, 1:1 等）
+            image_size: 图片大小（1K, 2K, 4K）
+            model: 模型名称
+            reference_urls: 参考图 URL 列表
+            progress_callback: 进度回调函数
             
         Returns:
             包含 image_url, seed 等信息的字典
         """
-        # 使用默认值
-        width = width or self.default_width
-        height = height or self.default_height
-        steps = steps or self.default_steps
-        cfg_scale = cfg_scale or self.default_cfg_scale
+        # 使用传入的参数或默认值
+        aspect_ratio = aspect_ratio or self.aspect_ratio
+        image_size = image_size or self.image_size
+        model = model or self.model
         
-        # 如果没有提供 seed，生成随机 seed
+        # 如果提供了负面提示词，拼接到主提示词
+        full_prompt = prompt
+        if negative_prompt:
+            full_prompt = f"{prompt}\n\nNegative prompt: {negative_prompt}"
+        
+        # 生成或使用提供的种子
         if seed is None:
             import random
             seed = random.randint(0, 2**32 - 1)
         
-        logger.info(f"Generating image with seed={seed}, size={width}x{height}")
+        logger.info(f"Generating image with GRSAI: model={model}, size={image_size}, ratio={aspect_ratio}")
         
         try:
-            # 调用 Nano Banana Pro API
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(
-                    f"{self.api_base}/images/generations",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": self.model,
-                        "prompt": prompt,
-                        "negative_prompt": negative_prompt,
-                        "width": width,
-                        "height": height,
-                        "steps": steps,
-                        "guidance_scale": cfg_scale,
-                        "seed": seed,
-                        "num_images": 1
-                    }
-                )
-                
-                response.raise_for_status()
-                result = response.json()
-                
-                # 解析响应
-                image_url = self._extract_image_url(result)
-                
-                logger.info(f"Image generated successfully: {image_url[:50]}...")
-                
-                return {
-                    "image_url": image_url,
-                    "seed": seed,
-                    "width": width,
-                    "height": height,
-                    "steps": steps,
-                    "cfg_scale": cfg_scale,
-                    "model": self.model
-                }
-                
+            # 第一步：提交生成任务，获取任务 ID
+            task_id = await self._submit_task(
+                model=model,
+                prompt=full_prompt,
+                aspect_ratio=aspect_ratio,
+                image_size=image_size,
+                reference_urls=reference_urls
+            )
+            
+            logger.info(f"Task submitted successfully, task_id: {task_id}")
+            
+            # 第二步：轮询获取结果
+            result = await self._poll_result(
+                task_id=task_id,
+                progress_callback=progress_callback
+            )
+            
+            # 提取图片 URL
+            image_url = result["results"][0]["url"]
+            
+            # 获取实际分辨率
+            resolution = self._get_resolution(image_size, aspect_ratio)
+            
+            logger.info(f"Image generated successfully: {image_url[:50]}...")
+            
+            return {
+                "image_url": image_url,
+                "seed": seed,
+                "width": int(resolution.split("x")[0]),
+                "height": int(resolution.split("x")[1]),
+                "steps": 20,  # GRSAI 不返回步数，使用默认值
+                "cfg_scale": 7.5,  # GRSAI 不返回 CFG，使用默认值
+                "model": model,
+                "task_id": task_id
+            }
+            
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error during image generation: {e.response.status_code} - {e.response.text}")
             raise Exception(f"图像生成失败: HTTP {e.response.status_code}")
@@ -111,37 +129,159 @@ class ImageGenerator:
             logger.error(f"Image generation failed: {e}")
             raise Exception(f"图像生成失败: {str(e)}")
     
-    def _extract_image_url(self, response: Dict[str, Any]) -> str:
+    async def _submit_task(
+        self,
+        model: str,
+        prompt: str,
+        aspect_ratio: str,
+        image_size: str,
+        reference_urls: Optional[list] = None
+    ) -> str:
         """
-        从 API 响应中提取图片 URL
-        适配不同的 API 响应格式
+        提交生成任务，立即返回任务 ID
+        
+        Args:
+            model: 模型名称
+            prompt: 提示词
+            aspect_ratio: 图片比例
+            image_size: 图片大小
+            reference_urls: 参考图 URL 列表
+            
+        Returns:
+            任务 ID
         """
-        # 尝试多种可能的响应格式
-        if "data" in response and isinstance(response["data"], list):
-            if len(response["data"]) > 0:
-                item = response["data"][0]
-                if "url" in item:
-                    return item["url"]
-                elif "b64_json" in item:
-                    # 如果返回的是 base64，需要转换
-                    return self._convert_base64_to_url(item["b64_json"])
+        url = f"{self.api_base}/v1/draw/nano-banana"
         
-        if "image_url" in response:
-            return response["image_url"]
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
         
-        if "url" in response:
-            return response["url"]
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "aspectRatio": aspect_ratio,
+            "imageSize": image_size,
+            "webHook": "-1",  # 立即返回 ID，不使用回调
+            "shutProgress": False  # 不关闭进度，用于轮询
+        }
         
-        logger.error(f"Unexpected response format: {response}")
-        raise ValueError("无法从响应中提取图片 URL")
+        # 添加参考图（如果提供）
+        if reference_urls:
+            payload["urls"] = reference_urls
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            result = response.json()
+            
+            # 检查响应
+            if result.get("code") != 0:
+                raise Exception(f"提交任务失败: {result.get('msg', 'Unknown error')}")
+            
+            task_id = result["data"]["id"]
+            return task_id
     
-    def _convert_base64_to_url(self, b64_data: str) -> str:
+    async def _poll_result(
+        self,
+        task_id: str,
+        progress_callback: Optional[Callable] = None
+    ) -> Dict[str, Any]:
         """
-        将 base64 图片数据转换为 data URL
+        轮询获取生成结果
         
-        Note: 在生产环境中，应该上传到 OSS/CDN 并返回永久 URL
+        Args:
+            task_id: 任务 ID
+            progress_callback: 进度回调函数（异步） (progress: int, status: str)
+            
+        Returns:
+            生成结果
         """
-        return f"data:image/png;base64,{b64_data}"
+        url = f"{self.api_base}/v1/draw/result"
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "id": task_id
+        }
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for attempt in range(self.max_poll_attempts):
+                try:
+                    response = await client.post(url, headers=headers, json=payload)
+                    response.raise_for_status()
+                    result = response.json()
+                    
+                    # 检查响应码
+                    if result.get("code") == -22:
+                        raise Exception("任务不存在")
+                    
+                    if result.get("code") != 0:
+                        raise Exception(f"查询失败: {result.get('msg', 'Unknown error')}")
+                    
+                    data = result["data"]
+                    status = data.get("status", "")
+                    progress = data.get("progress", 0)
+                    
+                    # 调用进度回调（支持异步）
+                    if progress_callback:
+                        if asyncio.iscoroutinefunction(progress_callback):
+                            await progress_callback(progress, status)
+                        else:
+                            progress_callback(progress, status)
+                    
+                    logger.info(f"Task {task_id}: status={status}, progress={progress}%")
+                    
+                    # 检查任务状态
+                    if status == "succeeded":
+                        logger.info(f"Task {task_id} completed successfully")
+                        return data
+                    
+                    elif status == "failed":
+                        failure_reason = data.get("failure_reason", "")
+                        error = data.get("error", "")
+                        error_msg = self._format_error_message(failure_reason, error)
+                        logger.error(f"Task {task_id} failed: {error_msg}")
+                        raise Exception(f"生成失败: {error_msg}")
+                    
+                    # 任务进行中，等待后继续轮询
+                    await asyncio.sleep(self.poll_interval)
+                    
+                except httpx.HTTPError as e:
+                    logger.warning(f"Poll attempt {attempt + 1} failed: {e}")
+                    if attempt < self.max_poll_attempts - 1:
+                        await asyncio.sleep(self.poll_interval)
+                    else:
+                        raise
+            
+            # 超过最大轮询次数
+            raise Exception(f"任务超时: 已轮询 {self.max_poll_attempts} 次仍未完成")
+    
+    def _format_error_message(self, failure_reason: str, error: str) -> str:
+        """格式化错误消息"""
+        error_map = {
+            "output_moderation": "输出内容违规，请修改提示词",
+            "input_moderation": "输入内容违规，请检查提示词",
+            "error": f"系统错误: {error}"
+        }
+        
+        return error_map.get(failure_reason, f"{failure_reason}: {error}")
+    
+    def _get_resolution(self, image_size: str, aspect_ratio: str) -> str:
+        """
+        根据图片大小和比例获取分辨率
+        
+        Args:
+            image_size: 1K, 2K, 4K
+            aspect_ratio: auto, 16:9, 9:16, 1:1 等
+            
+        Returns:
+            分辨率字符串，如 "1920x1080"
+        """
+        return self.size_resolution_map.get(image_size, {}).get(aspect_ratio, "1344x768")
     
     async def create_thumbnail(
         self,
@@ -160,24 +300,26 @@ class ImageGenerator:
         Returns:
             缩略图 URL
             
-        Note: 这是一个简化版本，实际应该下载图片、处理并上传到 CDN
+        Note: GRSAI 返回的图片 URL 有效期为 2 小时
+              在生产环境中应该下载图片并上传到自己的 CDN
         """
-        # 简化实现：直接返回原图 URL
-        # 在生产环境中，应该：
-        # 1. 下载原图
-        # 2. 使用 PIL 生成缩略图
-        # 3. 上传到 OSS/CDN
-        # 4. 返回缩略图 URL
-        
         logger.info(f"Creating thumbnail for: {image_url[:50]}...")
         
         try:
-            # 如果是 data URL，提取 base64 数据并处理
+            # 如果是普通 HTTP(S) URL，直接返回（简化实现）
+            if image_url.startswith("http"):
+                # TODO: 在生产环境中应该：
+                # 1. 下载原图
+                # 2. 使用 PIL 生成缩略图
+                # 3. 上传到 OSS/CDN
+                # 4. 返回缩略图 URL
+                logger.warning("Thumbnail creation skipped, returning original URL")
+                return image_url
+            
+            # 对于 data URL，尝试创建缩略图
             if image_url.startswith("data:image"):
                 return self._create_thumbnail_from_base64(image_url, max_width, max_height)
             
-            # 对于远程 URL，这里简化为直接返回
-            # TODO: 实现真正的缩略图生成
             return image_url
             
         except Exception as e:
@@ -223,24 +365,23 @@ class ImageGenerator:
     
     async def check_model_status(self) -> Dict[str, Any]:
         """
-        检查模型状态（健康检查）
+        检查 GRSAI 服务状态（健康检查）
         
         Returns:
-            模型状态信息
+            服务状态信息
         """
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            # 简单的健康检查：尝试访问 API 基础地址
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(
-                    f"{self.api_base}/models",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}"
-                    }
+                    f"{self.api_base}",
+                    headers={"Authorization": f"Bearer {self.api_key}"}
                 )
                 
-                response.raise_for_status()
                 return {
-                    "status": "available",
-                    "models": response.json()
+                    "status": "available" if response.status_code < 500 else "degraded",
+                    "api_base": self.api_base,
+                    "model": self.model
                 }
                 
         except Exception as e:
@@ -249,3 +390,64 @@ class ImageGenerator:
                 "status": "unavailable",
                 "error": str(e)
             }
+    
+    def get_supported_models(self) -> list:
+        """
+        获取支持的模型列表
+        
+        Returns:
+            模型名称列表
+        """
+        return [
+            "nano-banana-fast",      # 快速版（推荐，性价比高）
+            "nano-banana",           # 基础版
+            "nano-banana-pro",       # 标准专业版
+            "nano-banana-pro-vt",    # 专业版（旧通道）
+            "nano-banana-pro-cl",    # 高级专业版
+            "nano-banana-pro-vip",   # VIP 版（1K/2K）
+            "nano-banana-pro-4k-vip" # VIP 4K 版
+        ]
+    
+    def get_supported_sizes(self, model: str = None) -> list:
+        """
+        获取支持的图片大小
+        
+        Args:
+            model: 模型名称（某些模型有限制）
+            
+        Returns:
+            大小列表
+        """
+        model = model or self.model
+        
+        # VIP 1K/2K 版本只支持 1K 和 2K
+        if model == "nano-banana-pro-vip":
+            return ["1K", "2K"]
+        
+        # VIP 4K 版本只支持 4K
+        if model == "nano-banana-pro-4k-vip":
+            return ["4K"]
+        
+        # 其他模型支持全部
+        return ["1K", "2K", "4K"]
+    
+    def get_supported_aspect_ratios(self) -> list:
+        """
+        获取支持的图片比例
+        
+        Returns:
+            比例列表
+        """
+        return [
+            "auto",
+            "1:1",
+            "16:9",
+            "9:16",
+            "4:3",
+            "3:4",
+            "3:2",
+            "2:3",
+            "5:4",
+            "4:5",
+            "21:9"
+        ]

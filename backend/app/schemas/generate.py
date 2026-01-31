@@ -75,3 +75,44 @@ class GenerateResponse(BaseModel):
                 "message": "正在分析需求... 🧠"
             }
         }
+
+
+class GenerateStepsRequest(BaseModel):
+    """自动生成步骤请求"""
+    title: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="主题/标题"
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "title": "如何制作美味拿铁"
+            }
+        }
+
+
+class GenerateStepsResponse(BaseModel):
+    """自动生成步骤响应"""
+    steps: List[StepItem] = Field(
+        ...,
+        description="生成的步骤列表"
+    )
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "steps": [
+                    {
+                        "title": "研磨咖啡豆",
+                        "description": "选择新鲜的中深烘焙豆子"
+                    },
+                    {
+                        "title": "萃取浓缩",
+                        "description": "使用咖啡机萃取双份Espresso"
+                    }
+                ]
+            }
+        }

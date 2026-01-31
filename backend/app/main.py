@@ -54,13 +54,13 @@ async def health_check():
     """健康检查"""
     try:
         # 检查配置
-        config_ok = bool(settings.QWEN_API_KEY and settings.NANO_BANANA_API_KEY)
+        config_ok = bool(settings.QWEN_API_KEY and settings.GRSAI_API_KEY)
         
         return {
             "status": "healthy" if config_ok else "degraded",
             "config": {
                 "qwen_configured": bool(settings.QWEN_API_KEY),
-                "nano_banana_configured": bool(settings.NANO_BANANA_API_KEY)
+                "grsai_configured": bool(settings.GRSAI_API_KEY)
             },
             "environment": settings.APP_ENV
         }
