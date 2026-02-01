@@ -15,10 +15,26 @@ export interface VisualPreferences {
   custom_tags?: string[];
 }
 
-// 生成请求
+// 生成请求 (Flow Mode)
 export interface GenerateRequest {
   title: string;
   steps: StepItem[];
+  visual_preferences?: VisualPreferences;
+  seed?: number | null;
+}
+
+// VS模式场景
+export interface VSScenario {
+  title: string;
+  description: string;
+}
+
+// VS模式生成请求
+export interface GenerateVSRequest {
+  title: string;
+  left_scenario: VSScenario;
+  right_scenario: VSScenario;
+  actions: string[];
   visual_preferences?: VisualPreferences;
   seed?: number | null;
 }

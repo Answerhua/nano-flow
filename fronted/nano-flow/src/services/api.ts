@@ -23,6 +23,20 @@ export interface GenerateRequest {
   seed?: number | null;
 }
 
+export interface VSScenario {
+  title: string;
+  description: string;
+}
+
+export interface GenerateVSRequest {
+  title: string;
+  left_scenario: VSScenario;
+  right_scenario: VSScenario;
+  actions: string[];
+  visual_preferences?: VisualPreferences;
+  seed?: number | null;
+}
+
 export interface GenerateResponse {
   task_id: string;
   status: string;
@@ -156,6 +170,28 @@ export async function generateSteps(
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.detail || '生成步骤失败');
+  }
+
+  return response.json();
+}
+
+/**
+ * 创建VS模式图像生成任务
+ */
+export async function createVSGenerationTask(
+  request: GenerateVSRequest
+): Promise<GenerateResponse> {
+  const response = await fetch(`${API_BASE_URL}/generate-vs`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || '创建VS任务失败');
   }
 
   return response.json();

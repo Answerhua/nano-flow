@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     GRSAI_IMAGE_SIZE: str = "1K"  # 可选: 1K, 2K, 4K
     GRSAI_ASPECT_RATIO: str = "auto"  # 可选: auto, 16:9, 9:16, 1:1 等
     GRSAI_POLL_INTERVAL: int = 2  # 轮询间隔（秒）
-    GRSAI_MAX_POLL_ATTEMPTS: int = 2.5 * 60  # 最大轮询次数（5秒*60=300秒）
+    GRSAI_MAX_POLL_ATTEMPTS: int = 150  # 最大轮询次数（2秒*150=300秒）
     
     model_config = SettingsConfigDict(
         env_file=ENV_FILE_PATH,

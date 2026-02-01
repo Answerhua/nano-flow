@@ -3,7 +3,7 @@
 from typing import List, Dict, Any
 from loguru import logger
 
-from ..schemas import StepItem, VisualPreferences, CharacterType, ColorScheme
+from ..schemas import StepItem, VisualPreferences, CharacterType, ColorScheme, ScenarioItem
 from .llm_service import LLMService
 
 
@@ -192,3 +192,77 @@ Quality: masterpiece, best quality, highly detailed, 4k resolution"""
             return "medium"
         else:
             return "complex"
+    
+    async def build_vs_prompt(
+        self,
+        title: str,
+        left_scenario: ScenarioItem,
+        right_scenario: ScenarioItem,
+        actions: List[str],
+        visual_prefs: VisualPreferences
+    ) -> Dict[str, Any]:
+        """
+        构建 VS 对比图的图像生成提示词
+        
+        流程：
+        1. 解析视觉偏好
+        2. 使用 LLM 增强左右两侧场景的描述
+        3. 组装最终提示词
+        4. 添加质量和风格标签
+        
+        Args:
+            title: 对比主题标题
+            left_scenario: 左侧场景（反面教材）
+            right_scenario: 右侧场景（正面教材）
+            actions: 建议行动列表
+            visual_prefs: 视觉偏好
+            
+        Returns:
+            包含 enhanced_prompt, negative_prompt 等的字典
+        """
+        logger.info(f"Building VS prompt for: {title}")
+        
+        # 1. 解析视觉偏好
+        character = self._resolve_character(visual_prefs.character)
+        color_scheme = self._resolve_color_scheme(visual_prefs.color_scheme)
+        
+        # 2. 使用 LLM 增强场景描述
+        try:
+            enhanced_left = await self.llm_service.enhance_vs_scenario(
+                title=left_scenario.title,
+                description=left_scenario.description,
+                character_type=character,
+                color_scheme=color_scheme,
+                is_positive=False
+            )
+        except Exception as e:
+            logger.error(f"Failed to enhance left scenario: {e}")
+            enhanced_left = f"A {character} character looking {left_scenario.description}, stressed and confused"
+        
+        try:
+            enhanced_right = await self.llm_service.enhance_vs_scenario(
+                title=right_scenario.title,
+                description=right_scenario.description,
+                character_type=character,
+                color_scheme=color_scheme,
+                is_positive=True
+            )
+        except Exception as e:
+            logger.error(f"Failed to enhance right scenario: {e}")
+            enhanced_right = f"A {character} character looking {right_scenario.description}, happy and confident"
+        
+        # 3. 组装最终提示词
+        result = await self.llm_service.enhance_vs_full_prompt(
+            title=title,
+            left_scenario_enhanced=enhanced_left,
+            right_scenario_enhanced=enhanced_right,
+            left_title=left_scenario.title,
+            right_title=right_scenario.title,
+            actions=actions,
+            character_type=character,
+            color_scheme=color_scheme,
+            custom_tags=visual_prefs.custom_tags
+        )
+        
+        logger.info(f"VS Prompt built successfully, tokens: {result.get('tokens_used', 0)}")
+        return result

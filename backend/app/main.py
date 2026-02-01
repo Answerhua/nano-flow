@@ -7,7 +7,7 @@ from loguru import logger
 import sys
 
 from .config import settings
-from .api.v1 import generate
+from .api.v1 import generate, generate_vs
 
 # 配置日志
 logger.remove()
@@ -36,6 +36,7 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(generate.router, prefix="/api/v1")
+app.include_router(generate_vs.router, prefix="/api/v1")
 
 
 @app.get("/")

@@ -22,6 +22,10 @@ from .generate import (
     GenerateStepsRequest,
     GenerateStepsResponse
 )
+from .generate_vs import (
+    ScenarioItem,
+    GenerateVSRequest
+)
 
 __all__ = [
     # Common
@@ -44,4 +48,7 @@ __all__ = [
     "GenerateResponse",
     "GenerateStepsRequest",
     "GenerateStepsResponse",
+    # Generate VS
+    "ScenarioItem",
+    "GenerateVSRequest",
 ]

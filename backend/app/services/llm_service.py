@@ -439,3 +439,171 @@ Quality tags: masterpiece, best quality, highly detailed, clean composition, pro
         except Exception as e:
             logger.error(f"Failed to parse steps response: {e}")
             raise ValueError(f"解析步骤失败: {str(e)}")
+    
+    async def enhance_vs_scenario(
+        self,
+        title: str,
+        description: str,
+        character_type: str,
+        color_scheme: str,
+        is_positive: bool
+    ) -> str:
+        """
+        使用 LLM 增强 VS 对比场景的视觉描述
+        
+        Args:
+            title: 场景标题
+            description: 场景描述
+            character_type: 角色类型
+            color_scheme: 配色方案
+            is_positive: 是否为正面场景
+            
+        Returns:
+            增强后的视觉描述
+        """
+        side_label = "正面教材（右侧）" if is_positive else "反面教材（左侧）"
+        emotion = "快乐、自信、放松" if is_positive else "沮丧、疲惫、混乱"
+        
+        prompt = f"""请将以下 VS 对比场景转化为适合图像生成的视觉描述：
+
+场景位置：{side_label}
+场景标题：{title}
+场景描述：{description}
+角色类型：{character_type}
+配色方案：{color_scheme}
+情绪状态：{emotion}
+
+要求：
+1. 描述要简洁生动，适合文生图模型理解
+2. 融入 {character_type} 角色元素
+3. 体现场景的情绪状态（{emotion}）
+4. 使用 {color_scheme} 配色相关的关键词
+5. 突出角色的表情、姿态和周围环境
+6. 使用英文输出，适合 SD/DALL-E 等模型
+7. 保持可爱（kawaii）和扁平化（flat）风格
+
+示例输出格式：
+"A cute {character_type} character with [emotion expression], [posture/action], surrounded by [environmental elements], {color_scheme} color palette, kawaii style, flat vector illustration"
+
+请直接输出视觉描述，不要包含其他解释："""
+        
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self.api_base}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "你是一个专业的视觉描述专家，擅长将对比场景转化为生动的可视化描述。"
+                            },
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        "temperature": self.temperature,
+                        "max_tokens": self.max_tokens
+                    }
+                )
+                
+                response.raise_for_status()
+                result = response.json()
+                
+                enhanced = result["choices"][0]["message"]["content"].strip()
+                logger.info(f"Enhanced VS scenario: {title} -> {enhanced[:50]}...")
+                return enhanced
+                
+        except Exception as e:
+            logger.error(f"LLM VS scenario enhancement failed: {e}")
+            # 降级：返回原始描述
+            return f"{title}: {description}"
+    
+    async def enhance_vs_full_prompt(
+        self,
+        title: str,
+        left_scenario_enhanced: str,
+        right_scenario_enhanced: str,
+        left_title: str,
+        right_title: str,
+        actions: List[str],
+        character_type: str,
+        color_scheme: str,
+        custom_tags: List[str]
+    ) -> Dict[str, Any]:
+        """
+        整合所有元素，生成完整的 VS 对比图提示词
+        
+        Args:
+            title: 主题标题
+            left_scenario_enhanced: 增强后的左侧场景描述
+            right_scenario_enhanced: 增强后的右侧场景描述
+            left_title: 左侧标题
+            right_title: 右侧标题
+            actions: 建议行动列表
+            character_type: 角色类型
+            color_scheme: 配色方案
+            custom_tags: 自定义标签
+            
+        Returns:
+            包含 enhanced_prompt 和 metadata 的字典
+        """
+        actions_text = "\n".join([f"- {action}" for action in actions])
+        
+        # 构建基础提示词
+        base_prompt = f"""VS Comparison Infographic: "{title}"
+
+Layout: Split screen comparison (left vs right)
+
+Left Side (Negative Example):
+Title: "{left_title}" with ❌ mark
+Scene: {left_scenario_enhanced}
+
+Right Side (Positive Example):
+Title: "{right_title}" with ✓ mark
+Scene: {right_scenario_enhanced}
+
+Top Section:
+- Main title "{title}" in large decorative text at the very top
+- Cute decorative elements around the title
+
+Bottom Section:
+- Action items/suggestions displayed as cards or badges:
+{actions_text}
+
+Visual Style:
+- Character: {character_type if character_type != 'random' else 'cute animal character'}
+- Color scheme: {color_scheme}
+- Kawaii flat vector illustration
+- Clean white or very light background
+- Soft shadows and rounded corners
+- Clear visual separation between left and right
+- Minimalist design with high contrast between the two sides
+"""
+        
+        # 添加自定义标签
+        if custom_tags:
+            tags_text = ", ".join(custom_tags)
+            base_prompt += f"\nAdditional tags: {tags_text}"
+        
+        # 添加质量提示词
+        quality_prompt = """
+
+Quality tags: masterpiece, best quality, highly detailed, clean composition, professional infographic, modern design, 4k resolution, comparison chart, side by side layout"""
+        
+        # 添加负面提示词
+        negative_prompt = "blurry, low quality, distorted, messy, cluttered, realistic photo, 3d render, ugly, duplicate, watermark, text errors, bad anatomy, extra limbs, poorly drawn, deformed, mutation, disfigured, bad proportions"
+        
+        full_prompt = base_prompt + quality_prompt
+        
+        return {
+            "enhanced_prompt": full_prompt.strip(),
+            "negative_prompt": negative_prompt,
+            "tokens_used": len(full_prompt) // 4,
+            "llm_model": self.model
+        }
