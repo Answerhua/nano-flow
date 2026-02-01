@@ -7,7 +7,7 @@
 - **FastAPI** - 现代、高性能的 Web 框架
 - **Pydantic** - 数据验证和设置管理
 - **千问 LLM** - 智能提示词增强
-- **Nano Banana Pro** - 图像生成引擎
+- **GRSAI API** - Nano Banana Pro 图像生成（国内直连）
 - **Loguru** - 日志管理
 
 ## 功能模块
@@ -15,9 +15,12 @@
 ### 核心功能 (P0) ✅
 
 - ✅ 流程图生成 API (`POST /api/v1/generate`)
+- ✅ VS 对比图生成 API (`POST /api/v1/generate-vs`)
 - ✅ 任务状态查询 (`GET /api/v1/generate/{task_id}`)
+- ✅ 自动生成步骤 (`POST /api/v1/generate/generate-steps`)
 - ✅ 提示词智能增强（基于千问 LLM）
-- ✅ 图像生成（Nano Banana Pro 集成）
+- ✅ 图像生成（GRSAI API + Nano Banana Pro）
+- ✅ 实时进度跟踪
 - ✅ 异步任务处理
 - ✅ 健康检查接口
 
@@ -38,11 +41,13 @@ backend/
 │   │
 │   ├── api/                 # API 路由层
 │   │   └── v1/
-│   │       └── generate.py  # 生成接口
+│   │       ├── generate.py     # 流程图生成接口
+│   │       └── generate_vs.py  # VS 对比图生成接口
 │   │
 │   ├── schemas/             # Pydantic 数据模型
 │   │   ├── common.py        # 通用模型
 │   │   ├── generate.py      # 生成相关模型
+│   │   ├── generate_vs.py   # VS 对比图模型
 │   │   ├── task.py          # 任务状态模型
 │   │   └── visual.py        # 视觉偏好模型
 │   │
@@ -57,7 +62,9 @@ backend/
 ├── run.py                   # 启动脚本
 ├── requirements.txt         # Python 依赖
 ├── .env.example            # 环境变量示例
-└── README.md
+├── example.http            # HTTP 请求示例
+├── README.md
+└── GENERATE_VS_API.md      # VS 对比图 API 文档
 ```
 
 ## 快速开始
@@ -89,15 +96,20 @@ cp .env.example .env
 编辑 `.env` 文件：
 
 ```env
-# 必填项
+# 必填项 - API 密钥
 QWEN_API_KEY=your_qwen_api_key_here
-NANO_BANANA_API_KEY=your_nano_banana_pro_api_key_here
+GRSAI_API_KEY=your_grsai_api_key_here
 
 # 可选配置
 APP_ENV=development
 APP_DEBUG=True
 APP_PORT=8000
 CORS_ORIGINS=["http://localhost:5173","http://localhost:3000"]
+
+# GRSAI 图像生成配置（可选）
+GRSAI_MODEL=nano-banana-pro
+GRSAI_IMAGE_SIZE=1K
+GRSAI_ASPECT_RATIO=auto
 ```
 
 ### 3. 启动服务
@@ -204,6 +216,45 @@ curl "http://localhost:8000/api/v1/generate/550e8400-e29b-41d4-a716-446655440000
 }
 ```
 
+### VS 对比图生成
+
+**创建 VS 对比图任务：**
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/generate-vs" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "不好的学习方法 vs 好的学习方法",
+    "left_scenario": {
+      "title": "不好的学习方法",
+      "description": "被动、枯燥、混乱、疲惫"
+    },
+    "right_scenario": {
+      "title": "好的学习方法",
+      "description": "主动、清晰、轻松"
+    },
+    "actions": [
+      "设定目标",
+      "深度理解",
+      "主动输出",
+      "定期复盘"
+    ],
+    "visual_preferences": {
+      "character": "bear",
+      "color_scheme": "pastel",
+      "custom_tags": ["kawaii", "flat"]
+    }
+  }'
+```
+
+**查询 VS 对比图任务状态：**
+
+```bash
+curl "http://localhost:8000/api/v1/generate-vs/550e8400-e29b-41d4-a716-446655440000"
+```
+
+> 详细的 VS 对比图 API 文档请参考 [GENERATE_VS_API.md](./GENERATE_VS_API.md)
+
 ### 健康检查
 
 ```bash
@@ -230,9 +281,12 @@ curl "http://localhost:8000/health"
 | 变量 | 说明 | 默认值 | 必填 |
 |------|------|--------|------|
 | `QWEN_API_KEY` | 千问 API 密钥 | - | ✅ |
-| `NANO_BANANA_API_KEY` | Nano Banana Pro API 密钥 | - | ✅ |
+| `GRSAI_API_KEY` | GRSAI API 密钥 | - | ✅ |
 | `QWEN_API_BASE` | 千问 API 基础 URL | https://dashscope.aliyuncs.com/compatible-mode/v1 | ❌ |
-| `NANO_BANANA_API_BASE` | Nano Banana API 基础 URL | https://api.nanobanana.ai/v1 | ❌ |
+| `GRSAI_API_BASE` | GRSAI API 基础 URL | https://grsai.dakka.com.cn | ❌ |
+| `GRSAI_MODEL` | GRSAI 模型名称 | nano-banana-pro | ❌ |
+| `GRSAI_IMAGE_SIZE` | 图片大小 (1K/2K/4K) | 1K | ❌ |
+| `GRSAI_ASPECT_RATIO` | 图片比例 | auto | ❌ |
 | `APP_ENV` | 运行环境 | development | ❌ |
 | `APP_DEBUG` | 调试模式 | True | ❌ |
 | `APP_HOST` | 服务主机 | 0.0.0.0 | ❌ |
@@ -368,9 +422,13 @@ A:
 **Q: 图片生成失败（status: failed）**
 
 A:
-1. 检查 Nano Banana Pro API 配额
-2. 验证提示词长度是否超出限制
+1. 检查 GRSAI 账户积分余额
+2. 验证提示词是否包含违规内容
 3. 查看错误详情：`GET /api/v1/generate/{task_id}` 中的 `error` 字段
+4. 常见错误：
+   - `输出内容违规` - 修改提示词
+   - `输入内容违规` - 检查提示词
+   - `任务超时` - 重试或减小图片尺寸
 
 **Q: CORS 错误**
 
